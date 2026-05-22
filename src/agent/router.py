@@ -3,15 +3,24 @@ src/agent/router.py
 Classifies incoming query into one of 4 actions before any retrieval.
 """
 from __future__ import annotations
-import os, json
+
+import os
+import json
 from dataclasses import dataclass
 from typing import Literal, Optional
-from openai import AsyncOpenAI
+
+from groq import AsyncGroq
+
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-Action = Literal["direct_answer", "retrieve_then_answer", "clarify", "refuse"]
+Action = Literal[
+    "direct_answer",
+    "retrieve_then_answer",
+    "clarify",
+    "refuse",
+]
 
 ROUTER_SYSTEM = """You are a query classifier for TickerWire's ITC research assistant.
 The knowledge base contains ITC Limited's Annual Reports for FY22, FY23, FY24, and FY25 ONLY.
@@ -33,13 +42,27 @@ class RouteDecision:
     clarification_question: Optional[str] = None
 
 
-async def route_query(query: str, client: AsyncOpenAI) -> RouteDecision:
-    """Classify query into an action. Fast, ~50 token output."""
+async def route_query(query: str) -> RouteDecision:
+    """Classify query into an action."""
+
+    client = AsyncGroq(
+        api_key=os.getenv("GROQ_API_KEY")
+    )
+
     response = await client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.getenv(
+            "GROQ_MODEL",
+            "llama-3.1-8b-instant"
+        ),
         messages=[
-            {"role": "system", "content": ROUTER_SYSTEM},
-            {"role": "user", "content": query},
+            {
+                "role": "system",
+                "content": ROUTER_SYSTEM,
+            },
+            {
+                "role": "user",
+                "content": query,
+            },
         ],
         max_tokens=150,
         temperature=0,
@@ -47,16 +70,34 @@ async def route_query(query: str, client: AsyncOpenAI) -> RouteDecision:
     )
 
     raw = response.choices[0].message.content
+
     try:
         data = json.loads(raw)
+
         decision = RouteDecision(
             action=data["action"],
             reason=data.get("reason", ""),
-            clarification_question=data.get("clarification_question"),
+            clarification_question=data.get(
+                "clarification_question"
+            ),
         )
-    except Exception as e:
-        logger.warning("router_parse_error", error=str(e), raw=raw)
-        decision = RouteDecision(action="retrieve_then_answer", reason="parse fallback")
 
-    logger.info("routed", action=decision.action, reason=decision.reason)
+    except Exception as e:
+        logger.warning(
+            "router_parse_error",
+            error=str(e),
+            raw=raw,
+        )
+
+        decision = RouteDecision(
+            action="retrieve_then_answer",
+            reason="parse fallback",
+        )
+
+    logger.info(
+        "routed",
+        action=decision.action,
+        reason=decision.reason,
+    )
+
     return decision

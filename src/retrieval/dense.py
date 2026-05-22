@@ -1,30 +1,31 @@
 """
 src/retrieval/dense.py
-Dense vector retrieval using ChromaDB.
+Dense vector retrieval using ChromaDB + local SentenceTransformer embeddings.
 """
 from __future__ import annotations
 import os
 from typing import List, Dict
 import chromadb
-from openai import AsyncOpenAI
+from sentence_transformers import SentenceTransformer
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 
 class DenseRetriever:
     def __init__(self, persist_dir: str = None):
         persist_dir = persist_dir or os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_collection("itc_annual_reports")
-        self.openai = AsyncOpenAI()
+        self.encoder = SentenceTransformer(EMBED_MODEL)
 
     async def retrieve(self, query_text: str, top_k: int = 20) -> List[Dict]:
         """Embed query and retrieve top_k chunks by cosine similarity."""
-        response = await self.openai.embeddings.create(
-            model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-            input=query_text,
-        )
-        query_embedding = response.data[0].embedding
+        # SentenceTransformer is sync — fine to call directly in async context for CPU work
+        query_embedding = self.encoder.encode(
+            query_text, normalize_embeddings=True
+        ).tolist()
 
         results = self.collection.query(
             query_embeddings=[query_embedding],

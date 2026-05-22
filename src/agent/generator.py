@@ -3,9 +3,12 @@ src/agent/generator.py
 Generates streamed answers with citations. Handles all 4 action types.
 """
 from __future__ import annotations
+
 import os
 from typing import AsyncIterator, List, Dict, Optional
-from openai import AsyncOpenAI
+
+from groq import AsyncGroq
+
 from src.agent.cost_guard import truncate_chunks_to_limit
 from src.utils.logging import get_logger
 
@@ -48,9 +51,18 @@ Our system covers ITC Limited's Annual Reports for FY22–FY25 only. If you beli
 
 def _format_context(chunks: List[Dict]) -> str:
     parts = []
+
     for chunk in chunks:
-        header = f"[Chunk: {chunk['chunk_id']} | {chunk.get('citation', 'Unknown')} | Type: {chunk.get('block_type', 'prose')}]"
-        parts.append(f"{header}\n{chunk['text']}")
+        header = (
+            f"[Chunk: {chunk['chunk_id']} | "
+            f"{chunk.get('citation', 'Unknown')} | "
+            f"Type: {chunk.get('block_type', 'prose')}]"
+        )
+
+        parts.append(
+            f"{header}\n{chunk['text']}"
+        )
+
     return "\n\n---\n\n".join(parts)
 
 
@@ -58,35 +70,72 @@ async def generate_stream(
     query: str,
     chunks: List[Dict],
     action: str,
-    client: AsyncOpenAI,
     clarification_question: Optional[str] = None,
     refuse_reason: Optional[str] = None,
 ) -> AsyncIterator[str]:
-    """Yield answer tokens as a stream. Handles all 4 action types."""
+    """Yield answer tokens as a stream."""
 
-    # ── Non-retrieval actions: template-based, no LLM call ──────────────────
+    # ── Non-retrieval actions ────────────────────────────────────────────────
+
     if action == "clarify":
-        yield CLARIFY_TEMPLATE.format(question=clarification_question or "Which fiscal year are you referring to?")
+        yield CLARIFY_TEMPLATE.format(
+            question=clarification_question
+            or "Which fiscal year are you referring to?"
+        )
         return
 
     if action == "refuse":
-        yield REFUSE_TEMPLATE.format(reason=refuse_reason or "Query is outside the available corpus.")
+        yield REFUSE_TEMPLATE.format(
+            reason=refuse_reason
+            or "Query is outside the available corpus."
+        )
         return
 
-    # ── Retrieval-based actions: stream from GPT-4o-mini ────────────────────
-    system = SYSTEM_SYNTHESIS if action == "retrieve_then_answer" else SYSTEM_DIRECT
-    safe_chunks = truncate_chunks_to_limit(chunks, query, system)
+    # ── Retrieval-based actions ──────────────────────────────────────────────
+
+    system = (
+        SYSTEM_SYNTHESIS
+        if action == "retrieve_then_answer"
+        else SYSTEM_DIRECT
+    )
+
+    safe_chunks = truncate_chunks_to_limit(
+        chunks,
+        query,
+        system,
+    )
+
     context = _format_context(safe_chunks)
 
     messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"},
+        {
+            "role": "system",
+            "content": system,
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Context:\n{context}\n\n"
+                f"Question: {query}"
+            ),
+        },
     ]
 
-    logger.info("generating", action=action, chunks_used=len(safe_chunks))
+    logger.info(
+        "generating",
+        action=action,
+        chunks_used=len(safe_chunks),
+    )
+
+    client = AsyncGroq(
+        api_key=os.getenv("GROQ_API_KEY")
+    )
 
     stream = await client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        model=os.getenv(
+            "GROQ_MODEL",
+            "llama-3.1-8b-instant"
+        ),
         messages=messages,
         max_tokens=800,
         temperature=0.1,
@@ -95,5 +144,6 @@ async def generate_stream(
 
     async for event in stream:
         delta = event.choices[0].delta
+
         if delta.content:
             yield delta.content

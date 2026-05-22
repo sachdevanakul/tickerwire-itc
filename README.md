@@ -1,194 +1,422 @@
-# TickerWire-ITC Assistant
+# TickerWire – ITC Annual Report Research Assistant
 
-> Agentic RAG system answering journalist queries grounded in ITC Limited's Annual Reports (FY22–FY25).
+An AI-powered RAG (Retrieval-Augmented Generation) system built for querying ITC Limited Annual Reports (FY22–FY25).
+
+The system supports:
+- Hybrid Retrieval (Dense + BM25)
+- HyDE Query Expansion
+- Reranking
+- Query Routing
+- Citation-Based Answers
+- FastAPI REST API
+- Groq LLM Integration
 
 ---
 
-## Quick Start
+# Features
+
+## 1. Intelligent Query Routing
+
+Queries are classified into four categories:
+
+- `direct_answer`
+- `retrieve_then_answer`
+- `clarify`
+- `refuse`
+
+### Examples
+
+| Query | Action |
+|---|---|
+| What was ITC’s EBITDA in FY24? | direct_answer |
+| Compare cigarette revenue from FY22 to FY25 | retrieve_then_answer |
+| What was the revenue growth? | clarify |
+| Predict ITC stock price for 2027 | refuse |
+
+---
+
+# 2. Hybrid Retrieval Pipeline
+
+The system combines:
+
+## Dense Retrieval
+- SentenceTransformer embeddings
+- ChromaDB vector search
+
+## Sparse Retrieval
+- BM25 keyword retrieval
+
+## Fusion Strategy
+- Reciprocal Rank Fusion (RRF)
+
+This improves:
+- semantic understanding
+- exact keyword matching
+- financial terminology retrieval
+
+---
+
+# 3. HyDE (Hypothetical Document Embeddings)
+
+Before dense retrieval:
+1. LLM generates a hypothetical answer passage
+2. Passage is embedded
+3. Retrieval uses enriched semantic representation
+
+Benefits:
+- Better retrieval from long annual reports
+- Improved semantic matching
+- Higher recall
+
+---
+
+# 4. Reranking
+
+Retrieved chunks are reranked using Cohere Rerank API.
+
+Benefits:
+- Better relevance
+- Cleaner citations
+- Improved final answer quality
+
+---
+
+# 5. Grounded Generation
+
+The LLM answers ONLY using retrieved context.
+
+Rules enforced:
+- No hallucinations
+- Mandatory citations
+- No speculation
+- Missing information explicitly stated
+
+Example citation:
+
+```text
+[AR-FY24, p.79]
+```
+
+---
+
+# Tech Stack
+
+| Component | Technology |
+|---|---|
+| Backend | FastAPI |
+| LLM Provider | Groq |
+| Model | llama-3.1-8b-instant |
+| Embeddings | BAAI/bge-small-en-v1.5 |
+| Vector Database | ChromaDB |
+| Sparse Retrieval | BM25 |
+| Reranking | Cohere |
+| Tracing | OpenTelemetry |
+| Language | Python 3.11 |
+
+---
+
+# Project Structure
+
+```text
+src/
+│
+├── agent/
+│   ├── router.py
+│   ├── generator.py
+│   └── cost_guard.py
+│
+├── retrieval/
+│   ├── dense.py
+│   ├── bm25.py
+│   ├── hybrid.py
+│   ├── hyde.py
+│   └── reranker.py
+│
+├── ingestion/
+│   ├── chunker.py
+│   ├── parser.py
+│   └── indexer.py
+│
+├── api/
+│   ├── main.py
+│   └── models.py
+│
+└── utils/
+    ├── logging.py
+    └── tracing.py
+```
+
+---
+
+# API Endpoints
+
+## Root Endpoint
+
+```http
+GET /
+```
+
+### Response
+
+```json
+{
+  "message": "TickerWire ITC Assistant API running"
+}
+```
+
+---
+
+## Health Check
+
+```http
+GET /health
+```
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "chroma_chunks": 1000,
+  "bm25_loaded": true
+}
+```
+
+---
+
+## Query Endpoint
+
+```http
+POST /query
+```
+
+### Request
+
+```json
+{
+  "query": "What was ITC's cigarette segment revenue in FY2024?"
+}
+```
+
+### Response
+
+```json
+{
+  "query_id": "80a27049",
+  "action": "direct_answer",
+  "answer": "ITC cigarette segment revenue was ...",
+  "citations": [
+    {
+      "citation": "AR-FY24, p.79"
+    }
+  ],
+  "latency_ms": 10391.3
+}
+```
+
+---
+
+# Setup Instructions
+
+## 1. Clone Repository
 
 ```bash
-# 1. Clone & install
 git clone <repo-url>
 cd tickerwire-itc
-python -m venv .venv && source .venv/bin/activate
+```
+
+---
+
+## 2. Create Virtual Environment
+
+```bash
+python -m venv .venv
+```
+
+### Activate Environment
+
+#### Windows
+
+```bash
+.venv\Scripts\activate
+```
+
+#### Linux / Mac
+
+```bash
+source .venv/bin/activate
+```
+
+---
+
+## 3. Install Dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-# 2. Environment variables
-cp .env.example .env
-# Fill in: OPENAI_API_KEY, COHERE_API_KEY, REDIS_URL (optional)
+---
 
-# 3. Ingest PDFs (downloads from itcportal.com automatically)
-python scripts/ingest.py
+# Environment Variables
 
-# 4. Start the server
+Create a `.env` file:
+
+```env
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=llama-3.1-8b-instant
+
+COHERE_API_KEY=your_cohere_api_key
+
+OPENAI_API_KEY=dummy_not_used
+
+HYDE_ENABLED=true
+
+DENSE_TOP_K=20
+RERANK_TOP_N=5
+```
+
+---
+
+# Run Application
+
+```bash
 uvicorn src.api.main:app --reload --port 8000
+```
 
-# 5. (Optional) Start MCP server
-python src/mcp/server.py
+Open Swagger UI:
 
-# 6. Run evals in one command
-python scripts/run_evals.py
+```text
+http://127.0.0.1:8000/docs
 ```
 
 ---
 
-## Architecture Overview
+# Retrieval Pipeline
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    FastAPI  /query  (SSE)                    │
-└────────────────────────────┬────────────────────────────────┘
-                             │
-                    ┌────────▼────────┐
-                    │   Agent Router  │  ← decides action
-                    │  (GPT-4o-mini)  │    answer / retrieve /
-                    └────────┬────────┘    clarify / refuse
-                             │
-          ┌──────────────────┼──────────────────┐
-          │                  │                  │
-   ┌──────▼──────┐   ┌───────▼──────┐   ┌──────▼──────┐
-   │  HyDE Query │   │   Hybrid     │   │  MCP Tool   │
-   │  Expansion  │   │  Retrieval   │   │  (get_kpi)  │
-   └──────┬──────┘   │dense+BM25    │   └─────────────┘
-          │          └──────┬───────┘
-          │                 │
-          └────────┬────────┘
-                   │
-          ┌────────▼────────┐
-          │  Cohere Rerank  │
-          └────────┬────────┘
-                   │
-          ┌────────▼────────┐
-          │  Generator      │  ← streaming, citations
-          │  (GPT-4o-mini)  │
-          └────────┬────────┘
-                   │
-          ┌────────▼────────┐
-          │  Structured Log │  + OpenTelemetry trace
-          └─────────────────┘
+```text
+User Query
+    ↓
+Query Router
+    ↓
+HyDE Query Expansion
+    ↓
+Dense Retrieval + BM25
+    ↓
+Reciprocal Rank Fusion
+    ↓
+Cohere Reranking
+    ↓
+LLM Generation
+    ↓
+Grounded Answer + Citations
 ```
 
 ---
 
-## Design Decisions
+# Example Queries
 
-### 1. Embedding Model: `text-embedding-3-small`
-- 1536-dim, $0.02/1M tokens — ~10× cheaper than `large` with <5% retrieval loss on financial text.
-- Chunking: 512 tokens, 64-token overlap. Financial tables often span ~300 tokens; this captures them whole while staying under context limits.
+## Direct Answer
 
-### 2. Hybrid Retrieval (Dense + BM25)
-- Dense via **Chroma** (local, zero-infra) with cosine similarity.
-- BM25 via **rank_bm25** (pure Python, no Elasticsearch dependency) — catches exact ticker symbols, year references ("FY24"), and financial abbreviations that embeddings dilute.
-- Score fusion: **Reciprocal Rank Fusion (RRF)** — parameter-free, robust, outperforms linear interpolation on heterogeneous corpora (Cormack et al., 2009).
-
-### 3. Beyond-Baseline Technique: **HyDE** (Hypothetical Document Embeddings)
-- Justify: Financial queries are short ("What was EBIT in FY24?") but target long passages. HyDE generates a ~150-word hypothetical answer, embeds *that*, and retrieves against it — bridging the query-document length gap.
-- Ablation in eval harness shows +0.07 Recall@5 vs. raw query embedding on our test set.
-- Cost: ~300 tokens per query (≈$0.000006) — negligible.
-
-### 4. Re-ranker: **Cohere `rerank-english-v3.0`**
-- Applied to top-20 hybrid candidates → top-5 for generation.
-- Cross-encoder scoring captures query-passage interaction that bi-encoders miss.
-- Cost: $0.001 per 1K passages (effectively ~$0.00002/query at 20 candidates).
-
-### 5. Agent Routing
-Four actions via structured output (JSON mode):
-| Action | Trigger |
-|--------|---------|
-| `direct_answer` | High-confidence retrieval, factual lookup |
-| `retrieve_then_answer` | Multi-hop, needs synthesis |
-| `clarify` | Ambiguous fiscal year or metric name |
-| `refuse` | Out-of-corpus (non-ITC, pre-FY22, speculation) |
-
-Bounded retries: max 2 retrieval loops; after that, answer with what's found or refuse. Cost guard: abort if estimated prompt tokens > 6000.
-
-### 6. Streaming
-Server-Sent Events (SSE) via FastAPI `StreamingResponse`. First token < 1.5s because:
-- Route decision is fast (50-token output, ~200ms)
-- Retrieval is async (Chroma + BM25 run concurrently)
-- Generator streams immediately after reranking
-
-### 7. MCP Tool: `get_financial_kpi`
-Exposes a structured KPI lookup (revenue, EBITDA, PAT, segment data) with year filter. Avoids hallucinating numbers — the tool returns exact values from the ingested store. Called through `mcp` Python client in the agent loop.
-
-### 8. Observability
-- **Structured logs**: JSON via `structlog`, includes `query_id`, `action`, `chunks_retrieved`, `tokens_in`, `tokens_out`, `latency_ms`.
-- **Distributed traces**: OpenTelemetry → Jaeger (local) or any OTLP-compatible backend. Spans: `agent.route`, `retrieval.hybrid`, `retrieval.rerank`, `generation.stream`.
-
----
-
-## What Was Ruled Out
-
-| Option | Reason Ruled Out |
-|--------|-----------------|
-| Elasticsearch for BM25 | Adds infra complexity; `rank_bm25` is sufficient for ~4 PDFs |
-| Pinecone / Weaviate | Chroma is local, zero-cost, adequate for <50K chunks |
-| GPT-4o (full) for generation | 10× cost vs. 4o-mini; quality difference minimal for factual extraction |
-| LangGraph for agent | Overkill for 4-action decision; plain Python FSM is more debuggable |
-| Contextual Retrieval | Good technique but requires pre-processing each chunk with Claude — cost justified only at scale; HyDE gives similar gains at query time |
-| Query Rewriting | Added latency without meaningful recall gain in preliminary tests on financial text |
-
----
-
-## File Structure
-
-```
-tickerwire-itc/
-├── src/
-│   ├── ingestion/          # PDF download, parse, chunk, embed, index
-│   │   ├── downloader.py
-│   │   ├── parser.py
-│   │   ├── chunker.py
-│   │   └── indexer.py
-│   ├── retrieval/          # Hybrid retrieval + HyDE + reranking
-│   │   ├── dense.py
-│   │   ├── bm25.py
-│   │   ├── hybrid.py
-│   │   ├── hyde.py
-│   │   └── reranker.py
-│   ├── agent/              # Router + generator
-│   │   ├── router.py
-│   │   ├── generator.py
-│   │   └── cost_guard.py
-│   ├── mcp/                # MCP server + tool definition
-│   │   ├── server.py
-│   │   └── tools.py
-│   ├── api/                # FastAPI app
-│   │   ├── main.py
-│   │   ├── models.py
-│   │   └── streaming.py
-│   └── utils/
-│       ├── logging.py
-│       └── tracing.py
-├── eval/
-│   ├── dataset.json        # 50 Q&A pairs with ground-truth chunks
-│   ├── metrics.py
-│   └── run_evals.py
-├── scripts/
-│   ├── ingest.py
-│   └── run_evals.py
-├── docs/
-│   ├── approach.md
-│   └── metrics_report.md
-├── prompts.md
-├── requirements.txt
-├── .env.example
-└── README.md
+```text
+What was ITC's EBITDA in FY2024?
 ```
 
 ---
 
-## Metrics Summary
+## Comparative Query
 
-| Metric | Target | Achieved |
-|--------|--------|----------|
-| Recall@5 | ≥ 0.80 | **0.86** |
-| nDCG@10 vs baseline | trending up | **+0.11** |
-| Faithfulness | ≥ 90% | **93%** |
-| Correctness | ≥ 0.75 | **0.81** |
-| p95 latency | ≤ 5s | **3.8s** |
-| First-token latency | < 1.5s | **0.9s** |
-| Median cost/query | — | **$0.0018** |
-| p95 cost/query | — | **$0.0041** |
+```text
+Compare ITC cigarette revenue from FY22 to FY25
+```
 
-See `docs/metrics_report.md` for full breakdown.
+---
+
+## Clarification Query
+
+```text
+What was the revenue growth?
+```
+
+---
+
+## Refusal Query
+
+```text
+Predict ITC stock price for 2027
+```
+
+---
+
+# Design Decisions
+
+## Why Hybrid Retrieval?
+
+Dense retrieval captures semantic meaning while BM25 captures exact keywords.
+
+Combining both improves:
+- recall
+- precision
+- financial terminology matching
+
+---
+
+## Why HyDE?
+
+Annual reports contain:
+- long prose
+- indirect financial language
+- large contextual passages
+
+HyDE improves semantic retrieval quality by generating a hypothetical answer before embedding.
+
+---
+
+## Why Groq?
+
+Groq provides:
+- extremely fast inference
+- low latency
+- lower API cost
+- OpenAI-compatible SDK support
+
+---
+
+# Current Limitations
+
+- Retrieval quality depends on chunking quality
+- Financial tables may require better parsing
+- No conversational memory
+- No OCR support for scanned PDFs
+
+---
+
+# Future Improvements
+
+- Better table extraction
+- Multi-turn conversational memory
+- Dashboard frontend
+- Multi-company support
+- Query caching
+- Citation highlighting UI
+- Evaluation metrics pipeline
+
+---
+
+# Assignment Objectives Achieved
+
+- RAG Architecture
+- Hybrid Retrieval
+- HyDE Query Expansion
+- FastAPI Backend
+- Query Routing
+- Citation-Based Answers
+- Groq Integration
+- Cohere Reranking
+- Production-Style Modular Architecture
+
+---
+
+# Author
+
+Nakul  
+B.Tech CSE (AI & ML)
